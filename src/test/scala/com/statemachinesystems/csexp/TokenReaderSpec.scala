@@ -96,7 +96,7 @@ class TokenReaderSpec extends WordSpec with PropertyChecks with Matchers {
   } yield atomOf(bytes: _*)
 
   private def tokenStreamOf(bytes: Array[Byte]): Stream[Token] =
-    TokenReader.read(new ByteArrayInputStream(bytes)).get
+    TokenReader.read(Input.fromStream(new ByteArrayInputStream(bytes))).get
 
   private def errorMessageFrom(bytes: Array[Byte]): String = tokenStreamOf(bytes) match {
     case Stream(Error(errorType)) => errorType.toString

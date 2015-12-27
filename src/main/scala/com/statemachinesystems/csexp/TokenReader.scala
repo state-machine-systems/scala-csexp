@@ -1,23 +1,21 @@
 package com.statemachinesystems.csexp
 
-import java.io.{BufferedInputStream, InputStream}
 import java.nio.ByteBuffer
 
 import scala.annotation.tailrec
 import scala.util.Try
 
-
 object TokenReader {
 
-  private val Eof = -1
+  import Input.Eof
 
   private lazy val EmptyByteBuffer = ByteBuffer.allocate(0).asReadOnlyBuffer
 
-  def read(in: InputStream): Try[Stream[Token]] = Try {
-    readTokenStream(if (in.markSupported) in else new BufferedInputStream(in))
+  def read(in: Input): Try[Stream[Token]] = Try {
+    readTokenStream(in)
   }
 
-  private def readTokenStream(in: InputStream): Stream[Token] = {
+  private def readTokenStream(in: Input): Stream[Token] = {
     def continue(token: Token) = token match {
       case error: Error => Stream(error)
       case _ => Stream.cons(token, readTokenStream(in))
@@ -44,13 +42,16 @@ object TokenReader {
     }
   }
 
-  private def readAtom(in: InputStream, firstDigit: Int): Token =
-    readLength(in, firstDigit - '0') match {
-      case Left(errorType) => Error(errorType)
-      case Right(length) => readBytes(in, length)
-    }
+  private def readAtom(in: Input, firstDigit: Int): Token = {
+    val errorOrAtom = for {
+      length <- readLength(in, firstDigit - '0').right
+      buf <- in.readBytes(length).right
+    } yield buf
 
-  private def readEmptyAtom(in: InputStream): Token = in.read() match {
+    errorOrAtom.fold(Error, Atom)
+  }
+
+  private def readEmptyAtom(in: Input): Token = in.read() match {
     case ':' =>
       Atom(EmptyByteBuffer)
 
@@ -65,7 +66,7 @@ object TokenReader {
   }
 
   @tailrec
-  private def readLength(in: InputStream, length: Long): Either[ErrorType, Int] =
+  private def readLength(in: Input, length: Long): Either[ErrorType, Int] =
     if (length > Int.MaxValue)
       Left(LengthLimitExceeded)
     else
@@ -82,25 +83,4 @@ object TokenReader {
         case byte =>
           Left(IllegalByteInAtomLength(byte))
       }
-
-  private def readBytes(in: InputStream, length: Int): Token = {
-    val bytes = new Array[Byte](length)
-
-    @tailrec
-    def readIntoArray(offset: Int = 0): Int =
-      if (offset < length)
-        in.read(bytes, offset, length - offset) match {
-          case count if count > 0 => readIntoArray(offset + count)
-          case done => offset
-        }
-      else
-        offset
-
-    val bytesRead = readIntoArray()
-
-    if (bytesRead == length)
-      Atom(ByteBuffer.wrap(bytes).asReadOnlyBuffer)
-    else
-      Error(InsufficientInputData(expectedLength = length, actualLength = bytesRead))
-  }
 }
