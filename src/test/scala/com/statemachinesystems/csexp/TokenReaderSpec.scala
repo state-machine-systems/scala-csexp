@@ -1,9 +1,9 @@
 package com.statemachinesystems.csexp
 
-import java.io.ByteArrayInputStream
+import java.io.{ByteArrayInputStream, IOException, InputStream}
 import java.nio.ByteBuffer
 
-import org.scalacheck.Gen
+import org.scalacheck.{Gen, Shrink}
 import org.scalatest.prop.PropertyChecks
 import org.scalatest.{Matchers, WordSpec}
 
@@ -17,12 +17,9 @@ class TokenReaderSpec extends WordSpec with PropertyChecks with Matchers {
 
   val InputBytes = Gen.chooseNum[Byte](Byte.MinValue, Byte.MaxValue, (Digits union Parens union Colon).toSeq: _*)
 
-  s"A TokenReader" should {
+  "A TokenReader" should {
 
     "read a stream of tokens" in {
-      val tokenStreams = Gen.containerOf[Stream, Token](
-        Gen.oneOf(Gen.const(LParen), Gen.const(RParen), atoms(maxLength = 50)))
-
       forAll(tokenStreams) { stream =>
         val bytes = writeBytes(stream).toArray
         tokenStreamOf(bytes) shouldBe stream
@@ -37,7 +34,7 @@ class TokenReaderSpec extends WordSpec with PropertyChecks with Matchers {
 
     "reject leading zeros in atom lengths" in {
       forAll(Gen.oneOf(Digits.toSeq)) { byte =>
-        errorMessageFrom(Array('0', byte)) shouldBe LeadingZeroInAtomLength.toString
+        errorMessageFrom(Array[Byte]('0', byte)) shouldBe LeadingZeroInAtomLength.toString
       }
     }
 
@@ -73,8 +70,8 @@ class TokenReaderSpec extends WordSpec with PropertyChecks with Matchers {
         actualLength <- Gen.chooseNum(1, expectedLength)
         if actualLength < expectedLength
       } yield {
-          (expectedLength, actualLength)
-        }
+        (expectedLength, actualLength)
+      }
 
       forAll(atomsWithActualLengthLessThanExpected) {
         case (expectedLength, actualLength) =>
@@ -82,6 +79,30 @@ class TokenReaderSpec extends WordSpec with PropertyChecks with Matchers {
           errorMessageFrom(atomBytes) shouldBe InsufficientInputData(expectedLength, actualLength).toString
       }
     }
+
+    "safely wrap an input exception in an error token" in {
+      val exception = new IOException("expected")
+
+      val tokenStreamsWithInputFailures = for {
+        exampleStream <- tokenStreams if exampleStream.nonEmpty
+        inputBytes = writeBytes(exampleStream).toArray
+        throwAtIndex <- Gen.chooseNum(0, inputBytes.length - 1)
+        inputStream = new ByteArrayInputStream(inputBytes)
+      } yield tokenStreamOf(new ThrowingInputStream(inputStream, throwAtIndex, exception))
+
+      forAll(tokenStreamsWithInputFailures) { stream =>
+        val errorToken = stream.dropWhile {
+          case e: Error => false
+          case _ => true
+        }.head
+
+        errorMessageFrom(errorToken) shouldBe InputFailure(exception).toString
+      }
+    }
+  }
+
+  private def tokenStreams = Gen.containerOf[Stream, Token] {
+    Gen.oneOf(Gen.const(LParen), Gen.const(RParen), atoms(maxLength = 50))
   }
 
   private def characters(chars: Char*): Set[Byte] =
@@ -96,10 +117,18 @@ class TokenReaderSpec extends WordSpec with PropertyChecks with Matchers {
   } yield atomOf(bytes: _*)
 
   private def tokenStreamOf(bytes: Array[Byte]): Stream[Token] =
-    TokenReader.read(Input.fromStream(new ByteArrayInputStream(bytes))).get
+    tokenStreamOf(new ByteArrayInputStream(bytes))
+
+  private def tokenStreamOf(inputStream: InputStream): Stream[Token] =
+    TokenReader.read(Input.fromStream(inputStream))
 
   private def errorMessageFrom(bytes: Array[Byte]): String = tokenStreamOf(bytes) match {
     case Stream(Error(errorType)) => errorType.toString
+    case other => s"Not an error message: $other"
+  }
+
+  private def errorMessageFrom(token: Token): String = token match {
+    case Error(errorType) => errorType.toString
     case other => s"Not an error message: $other"
   }
 
@@ -115,5 +144,20 @@ class TokenReaderSpec extends WordSpec with PropertyChecks with Matchers {
     case RParen => Seq(')'.toByte)
     case Atom(buf) => s"${buf.array.length}:".getBytes ++ buf.array.toSeq
     case Error(_) => ???
+  }
+
+  private class ThrowingInputStream(underlying: InputStream,
+                                    throwAtIndex: Int,
+                                    exception: Exception) extends InputStream {
+    private var index = 0
+
+    override def read(): Int = {
+      if (index == throwAtIndex) {
+        throw exception
+      } else {
+        index += 1
+        underlying.read()
+      }
+    }
   }
 }

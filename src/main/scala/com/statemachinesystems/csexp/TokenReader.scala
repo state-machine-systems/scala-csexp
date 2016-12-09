@@ -11,9 +11,8 @@ object TokenReader {
 
   private lazy val EmptyByteBuffer = ByteBuffer.allocate(0).asReadOnlyBuffer
 
-  def read(in: Input): Try[Stream[Token]] = Try {
+  def read(in: Input): Stream[Token] =
     readTokenStream(in)
-  }
 
   private def readTokenStream(in: Input): Stream[Token] = {
     def continue(token: Token) = token match {
@@ -21,34 +20,36 @@ object TokenReader {
       case _ => Stream.cons(token, readTokenStream(in))
     }
 
-    in.read() match {
-      case '(' =>
-        continue(LParen)
+    try {
+      in.read() match {
+        case '(' =>
+          continue(LParen)
 
-      case ')' =>
-        continue(RParen)
+        case ')' =>
+          continue(RParen)
 
-      case firstDigit@('1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9') =>
-        continue(readAtom(in, firstDigit))
+        case firstDigit@('1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9') =>
+          continue(readAtom(in, firstDigit))
 
-      case '0' =>
-        continue(readEmptyAtom(in))
+        case '0' =>
+          continue(readEmptyAtom(in))
 
-      case Eof =>
-        Stream.empty
+        case Eof =>
+          Stream.empty
 
-      case byte =>
-        Stream(Error(IllegalInputByte(byte)))
+        case byte =>
+          Stream(Error(IllegalInputByte(byte)))
+      }
+    } catch {
+      case Input.InputException(errorType) => Stream(Error(errorType))
     }
   }
 
-  private def readAtom(in: Input, firstDigit: Int): Token = {
-    val errorOrAtom = for {
-      length <- readLength(in, firstDigit - '0').right
-      buf <- in.readBytes(length).right
-    } yield buf
-
-    errorOrAtom.fold(Error, Atom)
+  private def readAtom(in: Input, firstDigit: Int): Token = try {
+    val length = readLength(in, firstDigit - '0')
+    Atom(in.readBytes(length))
+  } catch {
+    case Input.InputException(errorType) => Error(errorType)
   }
 
   private def readEmptyAtom(in: Input): Token = in.read() match {
@@ -66,21 +67,21 @@ object TokenReader {
   }
 
   @tailrec
-  private def readLength(in: Input, length: Long): Either[ErrorType, Int] =
+  private def readLength(in: Input, length: Long): Int =
     if (length > Int.MaxValue)
-      Left(LengthLimitExceeded)
+      throw Input.InputException(LengthLimitExceeded)
     else
       in.read() match {
         case ':' =>
-          Right(length.toInt)
+          length.toInt
 
         case digit@('0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9') =>
           readLength(in, length * 10 + digit - '0')
 
         case Eof =>
-          Left(UnexpectedEndOfInputInAtomLength)
+          throw Input.InputException(UnexpectedEndOfInputInAtomLength)
 
         case byte =>
-          Left(IllegalByteInAtomLength(byte))
+          throw Input.InputException(IllegalByteInAtomLength(byte))
       }
 }

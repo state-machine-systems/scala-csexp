@@ -1,18 +1,22 @@
 package com.statemachinesystems.csexp
 
-import java.io.{BufferedInputStream, InputStream}
+import java.io.{BufferedInputStream, IOException, InputStream}
 import java.nio.ByteBuffer
 
 import scala.annotation.tailrec
 
 trait Input {
 
+  @throws[Input.InputException]
   def read(): Int
 
-  def readBytes(length: Int): Either[ErrorType, ByteBuffer]
+  @throws[Input.InputException]
+  def readBytes(length: Int): ByteBuffer
 }
 
 object Input {
+
+  case class InputException(errorType: ErrorType) extends Exception
 
   val Eof = -1
 
@@ -22,27 +26,37 @@ object Input {
 
 class InputStreamInput(in: InputStream) extends Input {
 
-  def read() =
+  def read() = try {
     in.read()
+  } catch {
+    case e: IOException => throw Input.InputException(InputFailure(e))
+  }
 
   def readBytes(length: Int) = {
     val bytes = new Array[Byte](length)
 
     @tailrec
-    def readIntoArray(offset: Int = 0): Int =
-      if (offset < length)
-        in.read(bytes, offset, length - offset) match {
-          case count if count > 0 => readIntoArray(offset + count)
-          case done => offset
+    def readIntoArray(offset: Int = 0): Int = {
+      if (offset < length) {
+        val count = try {
+          in.read(bytes, offset, length - offset)
+        } catch {
+          case e: IOException => throw Input.InputException(InputFailure(e))
         }
-      else
+        if (count > 0)
+          readIntoArray(offset + count)
+        else
+          offset
+      } else {
         offset
+      }
+    }
 
     val bytesRead = readIntoArray()
 
     if (bytesRead == length)
-      Right(ByteBuffer.wrap(bytes).asReadOnlyBuffer)
+      ByteBuffer.wrap(bytes).asReadOnlyBuffer
     else
-      Left(InsufficientInputData(expectedLength = length, actualLength = bytesRead))
+      throw Input.InputException(InsufficientInputData(expectedLength = length, actualLength = bytesRead))
   }
 }

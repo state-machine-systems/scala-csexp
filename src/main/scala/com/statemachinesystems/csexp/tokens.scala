@@ -37,3 +37,7 @@ case object UnexpectedEndOfInputInAtomLength extends ErrorType {
 case class InsufficientInputData(expectedLength: Int, actualLength: Int) extends ErrorType {
   override def toString = s"Read $actualLength from stream, required $expectedLength"
 }
+
+case class InputFailure(exception: Exception) extends ErrorType {
+  override def toString = s"Input failure: $exception"
+}
